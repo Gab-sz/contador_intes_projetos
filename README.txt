@@ -25,19 +25,3 @@ Como executar:
     1. Abra o terminal na pasta RAIZ do projeto (onde fica main.py)
     2. Rode: python main.py
 
-IMPORTANTE sobre os imports:
-    Como agora cada classe mora numa pasta diferente, os imports usam o
-    caminho completo, por exemplo:
-
-        from Camera.fonte_camera import FonteCamera
-        from contador.contador_de_itens import ContadorDeItens
-        from ObjetoRastreado.objeto_rastreado import ObjetoRastreado
-
-    O arquivo __init__.py vazio dentro de cada pasta e o que diz ao Python
-    "esta pasta e um pacote, pode importar coisas de dentro dela".
-
-    Os nomes das pastas (Camera, ObjetoRastreado) tem letra maiuscula no
-    inicio. Isso funciona normalmente no Windows, mas em Linux/Mac o
-    Python DIFERENCIA maiusculas de minusculas nos imports -- entao o
-    nome da pasta e o nome usado no import precisam ser identicos, letra
-    por letra, nos dois sistemas.
