@@ -2,8 +2,7 @@
 
 
 class ObjetoRastreado:
-    """Um item individual, do momento em que aparece no video ate sumir
-    de cena. Guarda posicao atual/anterior e se ja foi contado."""
+    
 
     def __init__(self, identificador, centro):
         self.identificador = identificador

@@ -24,6 +24,7 @@ class ContadorDeItens:
         self._proximo_id = 0
         self._contagem = 0
         self._registros = []
+        self._ultima_mascara = None
 
     @property
     def contagem(self):
@@ -33,14 +34,18 @@ class ContadorDeItens:
     def registros(self):
         return list(self._registros)
 
+    @property
+    def ultima_mascara(self):
+        
+        return self._ultima_mascara
+
     def reiniciar(self):
         self._contagem = 0
         self._objetos_rastreados = []
         self._registros = []
 
     def processar_quadro(self, quadro):
-        """Recebe um quadro BGR (numpy array) e devolve o quadro anotado
-        (com marcacoes, linha e contador desenhados)."""
+       
         altura, largura = quadro.shape[:2]
         linha_y = int(altura * self.proporcao_linha)
 
@@ -64,6 +69,7 @@ class ContadorDeItens:
         _, mascara = cv2.threshold(mascara, 200, 255, cv2.THRESH_BINARY)
         mascara = cv2.morphologyEx(mascara, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
         mascara = cv2.dilate(mascara, np.ones((5, 5), np.uint8), iterations=2)
+        self._ultima_mascara = mascara
 
         contornos, _ = cv2.findContours(mascara, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         deteccoes = []
@@ -76,7 +82,6 @@ class ContadorDeItens:
     def _atualizar_rastreamento(self, deteccoes, linha_y):
         nao_combinados = list(range(len(deteccoes)))
 
-        # tenta casar cada objeto ja rastreado com a deteccao mais proxima
         for objeto in self._objetos_rastreados:
             indice_encontrado, menor_distancia = None, self.distancia_maxima
             for indice in nao_combinados:
@@ -96,12 +101,10 @@ class ContadorDeItens:
             else:
                 objeto.marcar_perdido()
 
-        # remove rastreamentos que sumiram ha muitos quadros
         self._objetos_rastreados = [
             o for o in self._objetos_rastreados if o.quadros_perdidos <= self.max_quadros_perdidos
         ]
 
-        # cria novos rastreamentos para deteccoes que nao casaram com nada
         for indice in nao_combinados:
             self._objetos_rastreados.append(ObjetoRastreado(self._proximo_id, deteccoes[indice]))
             self._proximo_id += 1

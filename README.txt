@@ -1,43 +1,53 @@
-CONTADOR DE ITENS - ESTEIRA (estrutura em pastas)
-====================================================
+# Contador de Itens - Esteira
 
-Estrutura do projeto:
+Sistema de contagem automática de itens pequenos em esteira, usando visão computacional (OpenCV) e interface gráfica em customtkinter. 
 
-    app/
-        __init__.py
-        aplicativo_contador.py   -> classe AplicativoContador (interface grafica)
-    Camera/
-        __init__.py
-        fonte_camera.py          -> classe FonteCamera (acesso a webcam/camera)
-    contador/
-        __init__.py
-        contador_de_itens.py     -> classe ContadorDeItens (deteccao/rastreamento/contagem)
-    ObjetoRastreado/
-        __init__.py
-        objeto_rastreado.py      -> classe ObjetoRastreado (modelo de um item)
-    main.py                      -> ponto de entrada; roda a partir da RAIZ do projeto
-    README.txt
+## Como funciona
 
-Instalacao (uma vez so):
-    pip install opencv-python customtkinter pillow numpy
+Uma câmera capta os itens passando pela esteira. O sistema detecta cada item em movimento e conta quando ele cruza uma linha virtual na tela — sem precisar reconhecer o item especificamente.
 
-Como executar:
-    1. Abra o terminal na pasta RAIZ do projeto (onde fica main.py)
-    2. Rode: python main.py
+## Funcionalidades
 
-IMPORTANTE sobre os imports:
-    Como agora cada classe mora numa pasta diferente, os imports usam o
-    caminho completo, por exemplo:
+- Interface gráfica com contador em tempo real
+- Ajuste de sensibilidade e posição da linha de contagem
+- Visualização da máscara de detecção (para calibrar)
+- Histórico da sessão de contagem
+- Exportação do registro em CSV
 
-        from Camera.fonte_camera import FonteCamera
-        from contador.contador_de_itens import ContadorDeItens
-        from ObjetoRastreado.objeto_rastreado import ObjetoRastreado
+## Requisitos
 
-    O arquivo __init__.py vazio dentro de cada pasta e o que diz ao Python
-    "esta pasta e um pacote, pode importar coisas de dentro dela".
+- Python 3.10+
+- Webcam
 
-    Os nomes das pastas (Camera, ObjetoRastreado) tem letra maiuscula no
-    inicio. Isso funciona normalmente no Windows, mas em Linux/Mac o
-    Python DIFERENCIA maiusculas de minusculas nos imports -- entao o
-    nome da pasta e o nome usado no import precisam ser identicos, letra
-    por letra, nos dois sistemas.
+## Instalação
+
+Baixe o projeto para o seu computador:
+
+```bash
+git clone https://github.com/Gab-sz/contador_intes_projetos.git
+cd contador_intes_projetos
+```
+
+> `git clone` é usado só na primeira vez. Depois, para trazer atualizações do repositório, use `git pull` dentro da pasta do projeto.
+
+Instale as dependências:
+
+```bash
+pip install opencv-python customtkinter pillow numpy
+```
+
+## Como executar
+
+```bash
+python main.py
+```
+
+## Estrutura do projeto
+
+```
+app/               -> interface gráfica (AplicativoContador)
+Camera/            -> acesso à câmera (FonteCamera)
+contador/          -> lógica de detecção e contagem (ContadorDeItens)
+ObjetoRastreado/   -> modelo de um item rastreado
+main.py            -> ponto de entrada
+```
