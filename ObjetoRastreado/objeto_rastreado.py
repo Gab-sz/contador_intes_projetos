@@ -2,26 +2,36 @@
 
 
 class ObjetoRastreado:
-    
+    """Um item individual, do momento em que aparece no video ate sumir
+    de cena.
+
+    Em vez de comparar so a posicao do quadro anterior com a atual (o que
+    e sensivel a tremor/ruido bem em cima da linha), este objeto guarda um
+    "lado confirmado" da linha. Esse lado so muda quando o item sai
+    claramente da zona de seguranca em volta da linha -- pequenas
+    oscilacoes dentro dessa zona nao contam como cruzamento.
+    """
 
     def __init__(self, identificador, centro):
         self.identificador = identificador
         self.centro = centro
-        self.centro_anterior = centro
         self.quadros_perdidos = 0
         self.contado = False
+        self.lado_confirmado = None  # 'acima', 'abaixo' ou None (ainda indefinido)
 
     def atualizar_posicao(self, novo_centro):
-        self.centro_anterior = self.centro
         self.centro = novo_centro
         self.quadros_perdidos = 0
 
     def marcar_perdido(self):
         self.quadros_perdidos += 1
 
-    def cruzou_linha(self, linha_y):
-        """True se o objeto cruzou a linha horizontal 'linha_y' entre o
-        quadro anterior e o atual, em qualquer sentido."""
-        y_anterior = self.centro_anterior[1]
-        y_atual = self.centro[1]
-        return (y_anterior < linha_y <= y_atual) or (y_anterior > linha_y >= y_atual)
+    def lado_da_linha(self, linha_y, margem_seguranca):
+        """Retorna 'acima', 'abaixo', ou None se o centro estiver dentro
+        da zona de seguranca (perto demais da linha para ter certeza do lado)."""
+        y = self.centro[1]
+        if y < linha_y - margem_seguranca:
+            return "acima"
+        if y > linha_y + margem_seguranca:
+            return "abaixo"
+        return None

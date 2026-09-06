@@ -1,8 +1,9 @@
 """Modulo da interface grafica. Orquestra FonteCamera e ContadorDeItens."""
 
+import time
 import cv2
 import customtkinter as ctk
-from PIL import Image, ImageTk
+from PIL import Image
 import csv
 from datetime import datetime
 
@@ -18,18 +19,21 @@ COR_STATUS_NEUTRO = "#7f8c8d"
 
 
 class AplicativoContador(ctk.CTk):
-    
+    """So cuida de janela, layout e eventos da interface. Delega tudo de
+    camera para FonteCamera e toda a logica de contagem para ContadorDeItens."""
 
     def __init__(self):
         super().__init__()
         self.title("Contador de Itens - Esteira")
-        self.geometry("1180x720")
-        self.minsize(1000, 620)
+        self.geometry("1180x760")
+        self.minsize(1000, 640)
 
         self._camera = FonteCamera()
         self._contador = ContadorDeItens()
         self._executando = False
         self._mostrar_mascara = False
+        self._ultimo_tempo_quadro = None
+        self._fps_atual = 0.0
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -42,21 +46,23 @@ class AplicativoContador(ctk.CTk):
     # ------------------------------------------------------------------ #
 
     def _construir_barra_lateral(self):
-        barra = ctk.CTkFrame(self, width=280, corner_radius=0)
+        barra = ctk.CTkFrame(self, width=300, corner_radius=0)
         barra.grid(row=0, column=0, sticky="nsw")
         barra.grid_propagate(False)
+        barra.grid_rowconfigure(1, weight=1)
 
         ctk.CTkLabel(
             barra, text="Contador de Itens",
             font=ctk.CTkFont(size=20, weight="bold")
-        ).pack(padx=16, pady=(20, 4), anchor="w")
-        ctk.CTkLabel(
-            barra, text="Contagem automatica por esteira",
-            font=ctk.CTkFont(size=12), text_color="gray60"
-        ).pack(padx=16, pady=(0, 16), anchor="w")
+        ).grid(row=0, column=0, padx=16, pady=(20, 4), sticky="w")
+
+        # area rolavel com todas as secoes de controle
+        conteudo = ctk.CTkScrollableFrame(barra, fg_color="transparent")
+        conteudo.grid(row=1, column=0, sticky="nsew")
+        conteudo.grid_columnconfigure(0, weight=1)
 
         # -- secao: camera ------------------------------------------------
-        secao_camera = self._criar_secao(barra, "CAMERA")
+        secao_camera = self._criar_secao(conteudo, "CAMERA")
 
         self.campo_fonte = ctk.CTkEntry(
             secao_camera, placeholder_text="0 (webcam) ou URL"
@@ -81,8 +87,13 @@ class AplicativoContador(ctk.CTk):
         )
         self.rotulo_status.pack(side="left", padx=(6, 0))
 
+        self.rotulo_fps = ctk.CTkLabel(
+            secao_camera, text="FPS: --", font=ctk.CTkFont(size=12), text_color="gray60"
+        )
+        self.rotulo_fps.pack(anchor="w", padx=4, pady=(0, 4))
+
         # -- secao: controles ----------------------------------------------
-        secao_controles = self._criar_secao(barra, "CONTROLES")
+        secao_controles = self._criar_secao(conteudo, "CONTROLES")
 
         self.botao_iniciar = ctk.CTkButton(
             secao_controles, text="▶  Iniciar contagem",
@@ -106,34 +117,75 @@ class AplicativoContador(ctk.CTk):
         )
         self.botao_salvar.grid(row=0, column=1, sticky="ew", padx=(3, 0))
 
-        # -- secao: ajustes --------------------------------------------------
-        secao_ajustes = self._criar_secao(barra, "AJUSTES")
+        # -- secao: deteccao basica -----------------------------------------
+        secao_deteccao = self._criar_secao(conteudo, "DETECCAO")
 
-        self.rotulo_linha = ctk.CTkLabel(secao_ajustes, text="Posicao da linha: 50%")
+        self.rotulo_linha = ctk.CTkLabel(secao_deteccao, text="Posicao da linha: 50%")
         self.rotulo_linha.pack(anchor="w", padx=4)
         self.controle_linha = ctk.CTkSlider(
-            secao_ajustes, from_=0.1, to=0.9, command=self.atualizar_posicao_linha
+            secao_deteccao, from_=0.1, to=0.9, command=self.atualizar_posicao_linha
         )
         self.controle_linha.set(0.5)
         self.controle_linha.pack(fill="x", padx=4, pady=(0, 10))
 
-        self.rotulo_area = ctk.CTkLabel(secao_ajustes, text="Sensibilidade (area min.): 300")
+        self.rotulo_area = ctk.CTkLabel(secao_deteccao, text="Sensibilidade (area min.): 300")
         self.rotulo_area.pack(anchor="w", padx=4)
         self.controle_area = ctk.CTkSlider(
-            secao_ajustes, from_=50, to=2000, command=self.atualizar_area_minima
+            secao_deteccao, from_=50, to=2000, command=self.atualizar_area_minima
         )
         self.controle_area.set(300)
         self.controle_area.pack(fill="x", padx=4, pady=(0, 6))
 
         self.interruptor_mascara = ctk.CTkSwitch(
-            secao_ajustes, text="Ver mascara de deteccao",
+            secao_deteccao, text="Ver mascara de deteccao",
             command=self.alternar_mascara
         )
         self.interruptor_mascara.pack(anchor="w", padx=4, pady=(6, 4))
 
+        # -- secao: calibracao de velocidade / rastreamento ------------------
+        secao_velocidade = self._criar_secao(conteudo, "CALIBRACAO DE VELOCIDADE")
+        ctk.CTkLabel(
+            secao_velocidade,
+            text="Ajuste conforme a webcam e a velocidade real dos itens.",
+            font=ctk.CTkFont(size=11), text_color="gray60", wraplength=230, justify="left"
+        ).pack(anchor="w", padx=4, pady=(0, 8))
+
+        self.rotulo_margem = ctk.CTkLabel(
+            secao_velocidade, text="Zona de seguranca da linha: 15px"
+        )
+        self.rotulo_margem.pack(anchor="w", padx=4)
+        self.controle_margem = ctk.CTkSlider(
+            secao_velocidade, from_=5, to=60, number_of_steps=55,
+            command=self.atualizar_margem_seguranca
+        )
+        self.controle_margem.set(15)
+        self.controle_margem.pack(fill="x", padx=4, pady=(0, 10))
+
+        self.rotulo_distancia = ctk.CTkLabel(
+            secao_velocidade, text="Tolerancia de deslocamento: 60px"
+        )
+        self.rotulo_distancia.pack(anchor="w", padx=4)
+        self.controle_distancia = ctk.CTkSlider(
+            secao_velocidade, from_=10, to=200, number_of_steps=190,
+            command=self.atualizar_distancia_maxima
+        )
+        self.controle_distancia.set(60)
+        self.controle_distancia.pack(fill="x", padx=4, pady=(0, 10))
+
+        self.rotulo_oclusao = ctk.CTkLabel(
+            secao_velocidade, text="Tolerancia de oclusao: 10 quadros"
+        )
+        self.rotulo_oclusao.pack(anchor="w", padx=4)
+        self.controle_oclusao = ctk.CTkSlider(
+            secao_velocidade, from_=2, to=30, number_of_steps=28,
+            command=self.atualizar_tolerancia_oclusao
+        )
+        self.controle_oclusao.set(10)
+        self.controle_oclusao.pack(fill="x", padx=4, pady=(0, 6))
+
         # -- rodape: aparencia -------------------------------------------
         rodape = ctk.CTkFrame(barra, fg_color="transparent")
-        rodape.pack(side="bottom", fill="x", padx=16, pady=16)
+        rodape.grid(row=2, column=0, sticky="ew", padx=16, pady=16)
         ctk.CTkLabel(rodape, text="Tema:", font=ctk.CTkFont(size=12)).pack(side="left")
         self.interruptor_tema = ctk.CTkSwitch(
             rodape, text="Claro", command=self.alternar_tema
@@ -141,13 +193,14 @@ class AplicativoContador(ctk.CTk):
         self.interruptor_tema.pack(side="left", padx=8)
 
     def _criar_secao(self, pai, titulo):
-        
+        """Cria um bloco com titulo dentro da barra lateral, retorna o
+        frame onde os widgets daquela secao devem ser colocados."""
         ctk.CTkLabel(
             pai, text=titulo, font=ctk.CTkFont(size=11, weight="bold"),
             text_color="gray50"
-        ).pack(anchor="w", padx=16, pady=(10, 2))
+        ).pack(anchor="w", padx=4, pady=(10, 2))
         secao = ctk.CTkFrame(pai, fg_color="transparent")
-        secao.pack(fill="x", padx=12, pady=(0, 4))
+        secao.pack(fill="x", padx=0, pady=(0, 4))
         return secao
 
     def _construir_area_principal(self):
@@ -225,6 +278,7 @@ class AplicativoContador(ctk.CTk):
         self._executando = not self._executando
         if self._executando:
             self.botao_iniciar.configure(text="⏸  Pausar contagem", fg_color="#b5860b", hover_color="#96700a")
+            self._ultimo_tempo_quadro = None
             self._laco_atualizacao()
         else:
             self.botao_iniciar.configure(text="▶  Iniciar contagem", fg_color="#2b8a3e", hover_color="#237032")
@@ -255,6 +309,18 @@ class AplicativoContador(ctk.CTk):
         self._contador.area_minima = float(valor)
         self.rotulo_area.configure(text=f"Sensibilidade (area min.): {int(float(valor))}")
 
+    def atualizar_margem_seguranca(self, valor):
+        self._contador.margem_seguranca = int(float(valor))
+        self.rotulo_margem.configure(text=f"Zona de seguranca da linha: {int(float(valor))}px")
+
+    def atualizar_distancia_maxima(self, valor):
+        self._contador.distancia_maxima = float(valor)
+        self.rotulo_distancia.configure(text=f"Tolerancia de deslocamento: {int(float(valor))}px")
+
+    def atualizar_tolerancia_oclusao(self, valor):
+        self._contador.max_quadros_perdidos = int(float(valor))
+        self.rotulo_oclusao.configure(text=f"Tolerancia de oclusao: {int(float(valor))} quadros")
+
     def alternar_mascara(self):
         self._mostrar_mascara = bool(self.interruptor_mascara.get())
 
@@ -270,6 +336,17 @@ class AplicativoContador(ctk.CTk):
         ctk.CTkLabel(linha, text="item contado", anchor="w").grid(row=0, column=1, sticky="w")
         ctk.CTkLabel(linha, text=horario, text_color="gray60").grid(row=0, column=2, padx=8)
 
+    def _atualizar_fps(self):
+        agora = time.time()
+        if self._ultimo_tempo_quadro is not None:
+            delta = agora - self._ultimo_tempo_quadro
+            if delta > 0:
+                fps_instantaneo = 1.0 / delta
+                # suavizacao exponencial para o numero nao "tremer" na tela
+                self._fps_atual = self._fps_atual * 0.9 + fps_instantaneo * 0.1
+                self.rotulo_fps.configure(text=f"FPS: {self._fps_atual:.1f}")
+        self._ultimo_tempo_quadro = agora
+
     def _laco_atualizacao(self):
         if not self._executando:
             return
@@ -281,6 +358,8 @@ class AplicativoContador(ctk.CTk):
             self.botao_iniciar.configure(text="▶  Iniciar contagem", fg_color="#2b8a3e", hover_color="#237032")
             return
 
+        self._atualizar_fps()
+
         quadro = cv2.resize(quadro, (760, 480))
         contagem_antes = self._contador.contagem
         anotado = self._contador.processar_quadro(quadro)
@@ -291,9 +370,9 @@ class AplicativoContador(ctk.CTk):
             imagem_exibida = cv2.cvtColor(anotado, cv2.COLOR_BGR2RGB)
 
         imagem = Image.fromarray(imagem_exibida)
-        imagem_tk = ImageTk.PhotoImage(image=imagem)
-        self.rotulo_video.configure(image=imagem_tk, text="")
-        self.rotulo_video.image = imagem_tk
+        imagem_ctk = ctk.CTkImage(light_image=imagem, dark_image=imagem, size=(760, 480))
+        self.rotulo_video.configure(image=imagem_ctk, text="")
+        self.rotulo_video.image = imagem_ctk
 
         nova_contagem = self._contador.contagem
         self.rotulo_contagem.configure(text=str(nova_contagem))

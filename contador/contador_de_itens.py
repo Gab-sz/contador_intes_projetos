@@ -9,12 +9,25 @@ from ObjetoRastreado.objeto_rastreado import ObjetoRastreado
 
 class ContadorDeItens:
     """Toda a logica de visao computacional fica isolada aqui. A interface
-    grafica so chama processar_quadro() e le a propriedade contagem."""
+    grafica so chama processar_quadro() e le a propriedade contagem.
 
-    def __init__(self, area_minima=300, distancia_maxima=60, max_quadros_perdidos=10):
+    Todos os parametros abaixo sao publicos e podem ser ajustados em tempo
+    real pela interface (sliders), porque o valor ideal depende da camera
+    (resolucao/fps) e da velocidade real dos itens -- nao da pra cravar um
+    numero fixo que sirva para qualquer webcam.
+    """
+
+    def __init__(
+        self,
+        area_minima=300,
+        distancia_maxima=60,
+        max_quadros_perdidos=10,
+        margem_seguranca=15,
+    ):
         self.area_minima = area_minima
         self.distancia_maxima = distancia_maxima
         self.max_quadros_perdidos = max_quadros_perdidos
+        self.margem_seguranca = margem_seguranca  # zona de "ninguem sabe" em volta da linha (px)
         self.proporcao_linha = 0.5  # posicao da linha (0.1 a 0.9 da altura do quadro)
 
         self._subtrator_fundo = cv2.createBackgroundSubtractorMOG2(
@@ -36,7 +49,8 @@ class ContadorDeItens:
 
     @property
     def ultima_mascara(self):
-        
+        """Ultima mascara binaria de deteccao de movimento (util para calibrar
+        a sensibilidade vendo exatamente o que o algoritmo esta enxergando)."""
         return self._ultima_mascara
 
     def reiniciar(self):
@@ -45,7 +59,8 @@ class ContadorDeItens:
         self._registros = []
 
     def processar_quadro(self, quadro):
-       
+        """Recebe um quadro BGR (numpy array) e devolve o quadro anotado
+        (com marcacoes, linha, zona de seguranca e contador desenhados)."""
         altura, largura = quadro.shape[:2]
         linha_y = int(altura * self.proporcao_linha)
 
@@ -55,7 +70,17 @@ class ContadorDeItens:
         anotado = quadro.copy()
         for cx, cy in deteccoes:
             cv2.circle(anotado, (cx, cy), 6, (0, 255, 0), -1)
+
+        # zona de seguranca (faixa amarela transparente) + linha central
+        margem = self.margem_seguranca
+        overlay = anotado.copy()
+        cv2.rectangle(
+            overlay, (0, linha_y - margem), (largura, linha_y + margem),
+            (0, 255, 255), -1
+        )
+        anotado = cv2.addWeighted(overlay, 0.15, anotado, 0.85, 0)
         cv2.line(anotado, (0, linha_y), (largura, linha_y), (0, 0, 255), 2)
+
         cv2.putText(
             anotado, f"Contagem: {self._contagem}", (10, 30),
             cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 0), 2
@@ -82,6 +107,7 @@ class ContadorDeItens:
     def _atualizar_rastreamento(self, deteccoes, linha_y):
         nao_combinados = list(range(len(deteccoes)))
 
+        # tenta casar cada objeto ja rastreado com a deteccao mais proxima
         for objeto in self._objetos_rastreados:
             indice_encontrado, menor_distancia = None, self.distancia_maxima
             for indice in nao_combinados:
@@ -94,17 +120,40 @@ class ContadorDeItens:
             if indice_encontrado is not None:
                 objeto.atualizar_posicao(deteccoes[indice_encontrado])
                 nao_combinados.remove(indice_encontrado)
-                if not objeto.contado and objeto.cruzou_linha(linha_y):
-                    objeto.contado = True
-                    self._contagem += 1
-                    self._registros.append(datetime.now().strftime("%H:%M:%S"))
+                self._verificar_cruzamento(objeto, linha_y)
             else:
                 objeto.marcar_perdido()
 
+        # remove rastreamentos que sumiram ha muitos quadros
         self._objetos_rastreados = [
             o for o in self._objetos_rastreados if o.quadros_perdidos <= self.max_quadros_perdidos
         ]
 
+        # cria novos rastreamentos para deteccoes que nao casaram com nada
         for indice in nao_combinados:
-            self._objetos_rastreados.append(ObjetoRastreado(self._proximo_id, deteccoes[indice]))
+            novo_objeto = ObjetoRastreado(self._proximo_id, deteccoes[indice])
+            # ja define o lado inicial com a posicao de entrada, para nao
+            # precisar esperar mais um quadro so pra estabelecer a base
+            novo_objeto.lado_confirmado = novo_objeto.lado_da_linha(linha_y, self.margem_seguranca)
+            self._objetos_rastreados.append(novo_objeto)
             self._proximo_id += 1
+
+    def _verificar_cruzamento(self, objeto, linha_y):
+        """So conta quando o objeto tem um lado CONFIRMADO (fora da zona de
+        seguranca) diferente do ultimo lado confirmado. Tremores dentro da
+        zona de seguranca (lado_atual None) sao ignorados -- o ultimo lado
+        confirmado e mantido ate haver certeza do novo lado."""
+        lado_atual = objeto.lado_da_linha(linha_y, self.margem_seguranca)
+
+        if lado_atual is None:
+            return  # ainda dentro da zona de seguranca, nao decide nada
+
+        if objeto.lado_confirmado is None:
+            objeto.lado_confirmado = lado_atual
+            return
+
+        if lado_atual != objeto.lado_confirmado and not objeto.contado:
+            objeto.contado = True
+            objeto.lado_confirmado = lado_atual
+            self._contagem += 1
+            self._registros.append(datetime.now().strftime("%H:%M:%S"))
