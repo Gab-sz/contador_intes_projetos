@@ -1,4 +1,4 @@
-"""Modulo da interface grafica. Orquestra FonteCamera e ContadorDeItens."""
+"""Modulo da interface grafica. Orquestra FonteCamera, ContadorDeItens e BancoDados."""
 
 import time
 import cv2
@@ -9,6 +9,7 @@ from datetime import datetime
 
 from Camera.fonte_camera import FonteCamera
 from contador.contador_de_itens import ContadorDeItens
+from BancoDados.banco_dados import BancoDados
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -19,27 +20,33 @@ COR_STATUS_NEUTRO = "#7f8c8d"
 
 
 class AplicativoContador(ctk.CTk):
-    """So cuida de janela, layout e eventos da interface. Delega tudo de
-    camera para FonteCamera e toda a logica de contagem para ContadorDeItens."""
+    """So cuida de janela, layout e eventos da interface. Delega camera para
+    FonteCamera, contagem para ContadorDeItens e persistencia para BancoDados."""
 
     def __init__(self):
         super().__init__()
         self.title("Contador de Itens - Esteira")
-        self.geometry("1180x760")
-        self.minsize(1000, 640)
+        self.geometry("1280x780")
+        self.minsize(1080, 660)
 
         self._camera = FonteCamera()
         self._contador = ContadorDeItens()
+        self._banco = BancoDados()
         self._executando = False
         self._mostrar_mascara = False
         self._ultimo_tempo_quadro = None
         self._fps_atual = 0.0
+        self._itens_carregados = []
+        self._item_selecionado_id = None
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
         self._construir_barra_lateral()
         self._construir_area_principal()
+
+        self._carregar_itens_combobox()
+        self._atualizar_lista_banco_dados()
 
     # ------------------------------------------------------------------ #
     # Construcao da interface
@@ -56,10 +63,22 @@ class AplicativoContador(ctk.CTk):
             font=ctk.CTkFont(size=20, weight="bold")
         ).grid(row=0, column=0, padx=16, pady=(20, 4), sticky="w")
 
-        # area rolavel com todas as secoes de controle
         conteudo = ctk.CTkScrollableFrame(barra, fg_color="transparent")
         conteudo.grid(row=1, column=0, sticky="nsew")
         conteudo.grid_columnconfigure(0, weight=1)
+
+        # -- secao: item sendo contado ---------------------------------------
+        secao_item = self._criar_secao(conteudo, "ITEM")
+
+        self.combo_itens = ctk.CTkComboBox(
+            secao_item, values=["Nenhum item cadastrado"], command=self.selecionar_item
+        )
+        self.combo_itens.pack(fill="x", padx=4, pady=(4, 6))
+
+        self.botao_novo_item = ctk.CTkButton(
+            secao_item, text="+ Novo item", command=self.abrir_dialogo_novo_item
+        )
+        self.botao_novo_item.pack(fill="x", padx=4, pady=(0, 4))
 
         # -- secao: camera ------------------------------------------------
         secao_camera = self._criar_secao(conteudo, "CAMERA")
@@ -116,6 +135,12 @@ class AplicativoContador(ctk.CTk):
             linha_botoes, text="Salvar CSV", command=self.salvar_registro
         )
         self.botao_salvar.grid(row=0, column=1, sticky="ew", padx=(3, 0))
+
+        self.botao_salvar_bd = ctk.CTkButton(
+            secao_controles, text="💾 Registrar no banco de dados",
+            command=self.salvar_no_banco
+        )
+        self.botao_salvar_bd.pack(fill="x", padx=4, pady=(6, 4))
 
         # -- secao: deteccao basica -----------------------------------------
         secao_deteccao = self._criar_secao(conteudo, "DETECCAO")
@@ -193,8 +218,6 @@ class AplicativoContador(ctk.CTk):
         self.interruptor_tema.pack(side="left", padx=8)
 
     def _criar_secao(self, pai, titulo):
-        """Cria um bloco com titulo dentro da barra lateral, retorna o
-        frame onde os widgets daquela secao devem ser colocados."""
         ctk.CTkLabel(
             pai, text=titulo, font=ctk.CTkFont(size=11, weight="bold"),
             text_color="gray50"
@@ -212,7 +235,8 @@ class AplicativoContador(ctk.CTk):
         self.abas = ctk.CTkTabview(principal)
         self.abas.grid(row=0, column=0, sticky="nsew")
         aba_ao_vivo = self.abas.add("Ao vivo")
-        aba_historico = self.abas.add("Historico")
+        aba_historico = self.abas.add("Historico da sessao")
+        aba_banco = self.abas.add("Banco de Dados")
 
         # -- aba "Ao vivo" -------------------------------------------------
         aba_ao_vivo.grid_columnconfigure(0, weight=1)
@@ -244,12 +268,12 @@ class AplicativoContador(ctk.CTk):
         self.rotulo_ultima.grid(row=0, column=2, sticky="e", padx=20)
         barra_contagem.grid_columnconfigure(2, weight=1)
 
-        # -- aba "Historico" -------------------------------------------------
+        # -- aba "Historico da sessao" ----------------------------------------
         aba_historico.grid_columnconfigure(0, weight=1)
         aba_historico.grid_rowconfigure(1, weight=1)
 
         ctk.CTkLabel(
-            aba_historico, text="Registro de itens contados nesta sessao",
+            aba_historico, text="Itens contados nesta sessao (antes de registrar no banco)",
             font=ctk.CTkFont(size=14, weight="bold")
         ).grid(row=0, column=0, sticky="w", pady=(4, 8))
 
@@ -257,8 +281,169 @@ class AplicativoContador(ctk.CTk):
         self.lista_historico.grid(row=1, column=0, sticky="nsew")
         self.lista_historico.grid_columnconfigure(0, weight=1)
 
+        # -- aba "Banco de Dados" ----------------------------------------------
+        aba_banco.grid_columnconfigure(0, weight=1)
+        aba_banco.grid_columnconfigure(1, weight=1)
+        aba_banco.grid_rowconfigure(1, weight=1)
+
+        cabecalho_itens = ctk.CTkFrame(aba_banco, fg_color="transparent")
+        cabecalho_itens.grid(row=0, column=0, sticky="ew", pady=(4, 8))
+        ctk.CTkLabel(
+            cabecalho_itens, text="Itens cadastrados", font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(side="left")
+        ctk.CTkButton(
+            cabecalho_itens, text="Atualizar", width=90,
+            command=self._atualizar_lista_banco_dados
+        ).pack(side="right")
+
+        ctk.CTkLabel(
+            aba_banco, text="Historico do item selecionado",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).grid(row=0, column=1, sticky="w", pady=(4, 8), padx=(16, 0))
+
+        self.lista_itens_banco = ctk.CTkScrollableFrame(aba_banco)
+        self.lista_itens_banco.grid(row=1, column=0, sticky="nsew")
+        self.lista_itens_banco.grid_columnconfigure(0, weight=1)
+
+        self.lista_historico_item = ctk.CTkScrollableFrame(aba_banco)
+        self.lista_historico_item.grid(row=1, column=1, sticky="nsew", padx=(16, 0))
+        self.lista_historico_item.grid_columnconfigure(0, weight=1)
+
     # ------------------------------------------------------------------ #
-    # Eventos - cada um delega para a classe responsavel
+    # Eventos - item / banco de dados
+    # ------------------------------------------------------------------ #
+
+    def _carregar_itens_combobox(self):
+        self._itens_carregados = self._banco.listar_itens()
+        if not self._itens_carregados:
+            self.combo_itens.configure(values=["Nenhum item cadastrado"])
+            self.combo_itens.set("Nenhum item cadastrado")
+            self._item_selecionado_id = None
+            return
+
+        valores = [
+            f"{item['nome']} ({item['tipo']})" if item["tipo"] else item["nome"]
+            for item in self._itens_carregados
+        ]
+        self.combo_itens.configure(values=valores)
+        self.combo_itens.set(valores[0])
+        self._item_selecionado_id = self._itens_carregados[0]["id"]
+
+    def selecionar_item(self, valor_exibido):
+        valores = self.combo_itens.cget("values")
+        if valor_exibido in valores:
+            indice = valores.index(valor_exibido)
+            self._item_selecionado_id = self._itens_carregados[indice]["id"]
+
+    def abrir_dialogo_novo_item(self):
+        dialogo = ctk.CTkToplevel(self)
+        dialogo.title("Novo item")
+        dialogo.geometry("340x260")
+        dialogo.grab_set()  # janela modal, bloqueia a principal ate fechar
+
+        ctk.CTkLabel(dialogo, text="Nome do item:").pack(anchor="w", padx=16, pady=(20, 4))
+        campo_nome = ctk.CTkEntry(dialogo, placeholder_text="ex: Parafuso M4")
+        campo_nome.pack(fill="x", padx=16)
+
+        ctk.CTkLabel(dialogo, text="Tipo / categoria:").pack(anchor="w", padx=16, pady=(14, 4))
+        campo_tipo = ctk.CTkEntry(dialogo, placeholder_text="ex: Parafuso, Conector, Sensor")
+        campo_tipo.pack(fill="x", padx=16)
+
+        rotulo_erro = ctk.CTkLabel(dialogo, text="", text_color=COR_STATUS_ERRO)
+        rotulo_erro.pack(padx=16, pady=(10, 0))
+
+        def salvar():
+            nome = campo_nome.get().strip()
+            tipo = campo_tipo.get().strip()
+            if not nome:
+                rotulo_erro.configure(text="Informe um nome para o item.")
+                return
+            novo_id = self._banco.cadastrar_item(nome, tipo)
+            dialogo.destroy()
+            self._carregar_itens_combobox()
+            valores = self.combo_itens.cget("values")
+            for indice, item in enumerate(self._itens_carregados):
+                if item["id"] == novo_id:
+                    self.combo_itens.set(valores[indice])
+                    self._item_selecionado_id = novo_id
+                    break
+            self._atualizar_lista_banco_dados()
+
+        ctk.CTkButton(dialogo, text="Salvar item", command=salvar).pack(fill="x", padx=16, pady=20)
+
+    def salvar_no_banco(self):
+        if self._item_selecionado_id is None:
+            self._definir_status("Cadastre ou selecione um item primeiro", COR_STATUS_ERRO)
+            return
+        if self._contador.contagem == 0:
+            self._definir_status("Nada contado ainda nesta sessao", COR_STATUS_ERRO)
+            return
+
+        self._banco.registrar_contagem(self._item_selecionado_id, self._contador.contagem)
+        self._definir_status("Contagem registrada no banco de dados", COR_STATUS_OK)
+        self._atualizar_lista_banco_dados()
+
+    def _atualizar_lista_banco_dados(self):
+        for widget in self.lista_itens_banco.winfo_children():
+            widget.destroy()
+
+        itens = self._banco.listar_itens()
+        if not itens:
+            ctk.CTkLabel(
+                self.lista_itens_banco, text="Nenhum item cadastrado ainda.",
+                text_color="gray60"
+            ).grid(row=0, column=0, sticky="w", pady=8)
+            return
+
+        for indice, item in enumerate(itens):
+            total = self._banco.total_contado(item["id"])
+            linha = ctk.CTkFrame(self.lista_itens_banco, fg_color="transparent")
+            linha.grid(row=indice, column=0, sticky="ew", pady=4)
+            linha.grid_columnconfigure(0, weight=1)
+
+            texto_nome = item["nome"]
+            if item["tipo"]:
+                texto_nome += f"  —  {item['tipo']}"
+            ctk.CTkLabel(linha, text=texto_nome, anchor="w").grid(row=0, column=0, sticky="w")
+            ctk.CTkLabel(
+                linha, text=f"Total historico: {total} itens",
+                text_color="gray60", anchor="w"
+            ).grid(row=1, column=0, sticky="w")
+
+            ctk.CTkButton(
+                linha, text="Ver historico", width=110,
+                command=lambda item_id=item["id"], nome=item["nome"]: self._mostrar_historico_item(item_id, nome)
+            ).grid(row=0, column=1, rowspan=2, padx=8)
+
+    def _mostrar_historico_item(self, item_id, nome):
+        for widget in self.lista_historico_item.winfo_children():
+            widget.destroy()
+
+        ctk.CTkLabel(
+            self.lista_historico_item, text=f"Historico — {nome}",
+            font=ctk.CTkFont(size=13, weight="bold")
+        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
+
+        registros = self._banco.historico_contagens(item_id)
+        if not registros:
+            ctk.CTkLabel(
+                self.lista_historico_item, text="Nenhuma contagem registrada ainda.",
+                text_color="gray60"
+            ).grid(row=1, column=0, sticky="w")
+            return
+
+        for indice, registro in enumerate(registros, start=1):
+            linha = ctk.CTkFrame(self.lista_historico_item, fg_color="transparent")
+            linha.grid(row=indice, column=0, sticky="ew", pady=2)
+            linha.grid_columnconfigure(1, weight=1)
+            ctk.CTkLabel(linha, text=registro["data_hora"], anchor="w").grid(row=0, column=0, sticky="w")
+            ctk.CTkLabel(
+                linha, text=f"{registro['quantidade']} itens",
+                text_color="gray60", anchor="e"
+            ).grid(row=0, column=1, sticky="e")
+
+    # ------------------------------------------------------------------ #
+    # Eventos - camera / contagem / calibracao
     # ------------------------------------------------------------------ #
 
     def conectar_camera(self):
@@ -342,7 +527,6 @@ class AplicativoContador(ctk.CTk):
             delta = agora - self._ultimo_tempo_quadro
             if delta > 0:
                 fps_instantaneo = 1.0 / delta
-                # suavizacao exponencial para o numero nao "tremer" na tela
                 self._fps_atual = self._fps_atual * 0.9 + fps_instantaneo * 0.1
                 self.rotulo_fps.configure(text=f"FPS: {self._fps_atual:.1f}")
         self._ultimo_tempo_quadro = agora
